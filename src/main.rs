@@ -13,6 +13,7 @@ extern crate rocket_contrib;
 extern crate serde_derive;
 
 use rocket_contrib::Template;
+use rocket::response::NamedFile;
 
 #[derive(Serialize)]
 struct Note {
@@ -28,6 +29,20 @@ struct Notes {
 #[get("/")]
 fn index(notes: rocket::State<Notes>) -> Template {
   Template::render("index", &notes.inner())
+}
+
+#[get("/api/build_timestamp/<expected>")]
+fn build_timestamp(expected: String) -> &'static str {
+  let ts = env!("BUILD_TIMESTAMP");
+  if expected == ts {
+    std::thread::sleep(std::time::Duration::from_secs(10));
+  }
+  ts
+}
+
+#[get("/static/main.js")]
+fn static_files() -> Option<NamedFile> {
+  NamedFile::open(Path::new("generated/main.js")).ok()
 }
 
 fn parse_note(content: String) -> io::Result<Note> {
@@ -100,7 +115,7 @@ fn main() {
         .to_owned();
       Ok(rocket.manage(read_notes(&note_dir).unwrap()))
     }))
-    .mount("/", routes![index])
+    .mount("/", routes![index, build_timestamp, static_files])
     .attach(Template::fairing())
     .launch();
 }
