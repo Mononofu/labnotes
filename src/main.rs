@@ -6,24 +6,28 @@ use std::io;
 use std::io::Read;
 use std::path::Path;
 
+extern crate pulldown_cmark;
 extern crate rocket;
+extern crate rocket_contrib;
+#[macro_use]
+extern crate serde_derive;
 
+use rocket_contrib::Template;
+
+#[derive(Serialize)]
 struct Note {
   title: String,
   content: String,
 }
 
+#[derive(Serialize)]
 struct Notes {
   notes: Vec<Note>,
 }
 
 #[get("/")]
-fn index(notes: rocket::State<Notes>) -> String {
-  let mut out = String::new();
-  for note in notes.notes.iter() {
-    out += &note.title;
-  }
-  out
+fn index(notes: rocket::State<Notes>) -> Template {
+  Template::render("index", &notes.inner())
 }
 
 fn parse_note(content: String) -> io::Result<Note> {
@@ -35,8 +39,11 @@ fn parse_note(content: String) -> io::Result<Note> {
 
   let mut note = Note {
     title: "".to_string(),
-    content: content.to_string(),
+    content: "".to_string(),
   };
+
+  let parser = pulldown_cmark::Parser::new_ext(content, pulldown_cmark::OPTION_ENABLE_TABLES);
+  pulldown_cmark::html::push_html(&mut note.content, parser);
 
   for line in header.split("\n") {
     let key_val: Vec<&str> = line.splitn(2, ":").collect();
@@ -94,5 +101,6 @@ fn main() {
       Ok(rocket.manage(read_notes(&note_dir).unwrap()))
     }))
     .mount("/", routes![index])
+    .attach(Template::fairing())
     .launch();
 }

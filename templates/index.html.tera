@@ -1,0 +1,27 @@
+<html>
+<head>
+
+	<style>
+	td {
+		padding: 5px;
+		text-align: right;
+	}
+	th {
+		padding-left: 10px;
+		padding-right: 10px;
+	}
+</style>
+
+</head>
+
+<body>
+
+
+{% for note in notes %}
+<h2>{{ note.title }}</h2>
+<p>{{ note.content | safe }}</p>
+{% endfor %}
+
+</body>
+
+</html>
