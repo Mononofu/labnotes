@@ -5,8 +5,10 @@ use std::fs;
 use std::io;
 use std::io::Read;
 use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex};
 
 extern crate chrono;
+extern crate notify;
 extern crate pulldown_cmark;
 extern crate rocket;
 extern crate rocket_contrib;
@@ -14,6 +16,7 @@ extern crate rocket_contrib;
 extern crate serde_derive;
 
 use chrono::prelude::*;
+use notify::Watcher;
 use rocket_contrib::Template;
 use rocket::response::NamedFile;
 
@@ -24,23 +27,43 @@ struct Note {
   content: String,
 }
 
-#[derive(Serialize)]
 struct Notes {
-  notes: Vec<Note>,
+  notes: Arc<Mutex<Vec<Note>>>,
+  version: Arc<(Mutex<u64>, Condvar)>,
+  watcher: Mutex<notify::RecommendedWatcher>,
 }
 
 #[get("/")]
 fn index(notes: rocket::State<Notes>) -> Template {
-  Template::render("index", &notes.inner())
+  #[derive(Serialize)]
+  struct TemplateData<'a> {
+    notes: &'a Vec<Note>,
+  };
+
+  Template::render(
+    "index",
+    TemplateData {
+      notes: &notes.notes.lock().unwrap(),
+    },
+  )
 }
 
-#[get("/api/build_timestamp/<expected>")]
-fn build_timestamp(expected: String) -> &'static str {
-  let ts = env!("BUILD_TIMESTAMP");
-  if expected == ts {
-    std::thread::sleep(std::time::Duration::from_secs(30));
+fn format_version(data_version: &u64) -> String {
+  format!("build_{}__data_{}", env!("BUILD_TIMESTAMP"), data_version)
+}
+
+#[get("/api/version/<expected>")]
+fn version(notes: rocket::State<Notes>, expected: String) -> String {
+  let &(ref lock, ref cvar) = &*notes.version;
+  let mut data_version = lock.lock().unwrap();
+  if format_version(&*data_version) == expected {
+    // Wait until the version changes.
+    data_version = cvar
+      .wait_timeout(data_version, std::time::Duration::from_secs(60))
+      .unwrap()
+      .0;
   }
-  ts
+  format_version(&*data_version)
 }
 
 #[get("/static/main.js")]
@@ -92,8 +115,8 @@ fn parse_note(content: String) -> io::Result<Note> {
   Ok(note)
 }
 
-fn read_notes(note_dir: &str) -> io::Result<Notes> {
-  let mut notes = Notes { notes: vec![] };
+fn read_notes(note_dir: &str) -> io::Result<Vec<Note>> {
+  let mut notes = vec![];
 
   for note_path in fs::read_dir(Path::new(note_dir)).expect("Unable to list note directory") {
     let note_path = note_path.expect("unable to get entry");
@@ -108,12 +131,49 @@ fn read_notes(note_dir: &str) -> io::Result<Notes> {
 
     let mut data = String::new();
     fs::File::open(note_path.path())?.read_to_string(&mut data)?;
-    notes.notes.push(parse_note(data)?);
+    notes.push(parse_note(data)?);
   }
 
   // Put newest notes first.
-  notes.notes.sort_by(|a, b| b.date.cmp(&a.date));
+  notes.sort_by(|a, b| b.date.cmp(&a.date));
 
+  Ok(notes)
+}
+
+fn watch_notes(note_dir: &str) -> io::Result<Notes> {
+  let (tx, rx) = std::sync::mpsc::channel();
+  let notes = Notes {
+    notes: Arc::new(Mutex::new(read_notes(note_dir)?)),
+    version: Arc::new((Mutex::new(0), Condvar::new())),
+    watcher: std::sync::Mutex::new(notify::watcher(tx, std::time::Duration::from_secs(1)).unwrap()),
+  };
+
+  notes
+    .watcher
+    .lock()
+    .unwrap()
+    .watch(note_dir, notify::RecursiveMode::Recursive)
+    .unwrap();
+
+  let note_dir = note_dir.to_string();
+  let shared_notes = notes.notes.clone();
+  let shared_version = notes.version.clone();
+  std::thread::spawn(move || {
+    println!("starting watcher thread ");
+    loop {
+      match rx.recv() {
+        Ok(event) => {
+          println!("{:?}", event);
+          *shared_notes.lock().unwrap() = read_notes(&note_dir).unwrap();
+
+          let &(ref lock, ref cvar) = &*shared_version;
+          *lock.lock().unwrap() += 1;
+          cvar.notify_all();
+        }
+        Err(e) => println!("watch error: {:?}", e),
+      }
+    }
+  });
   Ok(notes)
 }
 
@@ -125,9 +185,9 @@ fn main() {
         .get_str("note_dir")
         .unwrap_or("notes")
         .to_owned();
-      Ok(rocket.manage(read_notes(&note_dir).unwrap()))
+      Ok(rocket.manage(watch_notes(&note_dir).unwrap()))
     }))
-    .mount("/", routes![index, build_timestamp, static_files])
+    .mount("/", routes![index, version, static_files])
     .attach(Template::fairing())
     .launch();
 }

@@ -1,6 +1,6 @@
 async function reloadIfNewer(current) {
   try {
-    let r = await fetch(`/api/build_timestamp/${current}`);
+    let r = await fetch(`/api/version/${current}`);
     let timestamp = await r.text();
     if (timestamp != current) {
       document.location.reload();
@@ -11,7 +11,7 @@ async function reloadIfNewer(current) {
 }
 
 async function main(): Promise<void> {
-  let r = await fetch('/api/build_timestamp/unknown');
+  let r = await fetch('/api/version/unknown');
   let currentTimestamp = await r.text();
   reloadIfNewer(currentTimestamp);
 }
