@@ -20,6 +20,7 @@
 
 {% for note in notes %}
 <h2>{{ note.title }}</h2>
+<p>{{ note.date }}</p>
 <p>{{ note.content | safe }}</p>
 {% endfor %}
 

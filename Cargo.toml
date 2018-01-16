@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["swj"]
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 rocket = "0.3.6"
 rocket_codegen = "0.3.6"
 serde = "1.0"

@@ -6,18 +6,21 @@ use std::io;
 use std::io::Read;
 use std::path::Path;
 
+extern crate chrono;
 extern crate pulldown_cmark;
 extern crate rocket;
 extern crate rocket_contrib;
 #[macro_use]
 extern crate serde_derive;
 
+use chrono::prelude::*;
 use rocket_contrib::Template;
 use rocket::response::NamedFile;
 
 #[derive(Serialize)]
 struct Note {
   title: String,
+  date: DateTime<Utc>,
   content: String,
 }
 
@@ -35,7 +38,7 @@ fn index(notes: rocket::State<Notes>) -> Template {
 fn build_timestamp(expected: String) -> &'static str {
   let ts = env!("BUILD_TIMESTAMP");
   if expected == ts {
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    std::thread::sleep(std::time::Duration::from_secs(30));
   }
   ts
 }
@@ -55,6 +58,7 @@ fn parse_note(content: String) -> io::Result<Note> {
   let mut note = Note {
     title: "".to_string(),
     content: "".to_string(),
+    date: DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc),
   };
 
   let parser = pulldown_cmark::Parser::new_ext(content, pulldown_cmark::OPTION_ENABLE_TABLES);
@@ -72,7 +76,11 @@ fn parse_note(content: String) -> io::Result<Note> {
 
     match key_val[0].as_ref() {
       "name" => note.title = val.to_string(),
-      "date" => {}
+      "date" => {
+        note.date = Utc
+          .datetime_from_str(&val, "%F %R")
+          .expect(&("Failed to parse '".to_owned() + val + "'"))
+      }
       _ => {
         return Err(io::Error::new(
           io::ErrorKind::InvalidInput,
@@ -102,6 +110,10 @@ fn read_notes(note_dir: &str) -> io::Result<Notes> {
     fs::File::open(note_path.path())?.read_to_string(&mut data)?;
     notes.notes.push(parse_note(data)?);
   }
+
+  // Put newest notes first.
+  notes.notes.sort_by(|a, b| b.date.cmp(&a.date));
+
   Ok(notes)
 }
 
